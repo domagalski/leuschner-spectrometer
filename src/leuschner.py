@@ -347,6 +347,106 @@ class Spectrometer(_katcp.FpgaClient):
         self.int_time = self.acc_len / self.clock_rate
         self.resolution = self.bandwidth / self.nchan
 
+class Wideband(Spectrometer):
+    """
+    I made a simple wideband spectrometer for a CalDay demo.
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        Create the interface to the ROACH.
+        """
+        # Run the katcp initialization.
+        _katcp.FpgaClient.__init__(self, *args, **kwargs)
+
+        # Set some variables to default values.
+        self.mode = 'wide'
+        self.downsample = 1
+        self.count = 0
+        self.eq_coeff = None
+        self.boffile = 'spec_wideband.bof'
+        self.nchan = 1 << 13    # 8192 channels.
+        self.fft_shift = (1 << 14) - 1  # Shift every stage.
+        self.acc_len = None
+
+    def init_spec(self,
+                  eq_coeff=16,
+                  acc_len=1<<27,
+                  shift=(1<<14)-1,
+                  force_restart=False):
+        """
+        This function starts the bof process on the ROACH. First, it
+        checks to see if the spectrometer is already running, then
+        initializes it if it isn't.
+
+        Input:
+
+        - ``eq_coeff``: The FFT output is 18 bits and needs to be \
+                quantized down to 4 bits. This determines how to \
+                scale the data down properly.
+        - ``acc_len``: This parameter determines how long to \
+                integrate before each data readout.
+        - ``shift``: This determines which stages of the FFT to shift.
+        - ``force_restart``: Restart the bof process even if it is \
+                already running.
+        """
+        # Detect a running spectrometer
+        prog_bof = True
+        if force_restart:
+            print 'WARNING: Forcing a possible restart of the spectrometer.'
+            self.progdev('')
+        else:
+            prog_bof = not self.check_running()
+
+        if prog_bof:
+            print 'Starting the spectrometer...'
+            self.eq_coeff = eq_coeff
+            self.fft_shift = shift
+            self.acc_len = acc_len
+            self.progdev(self.boffile)
+            self.write_int('fft_shift', self.fft_shift)
+            self.write_int('eq_coeff', self.eq_coeff)
+
+            # Sync pulse lets the spectrometer know when to start.
+            for i in (0, 1, 0):
+                self.write_int('sync_pulse', i)
+
+            # This starts the accumulator
+            self.write_int('acc_length', self.acc_len)
+            while self.read_int('acc_num') < 2: # throw away 1st spectrum
+                _time.sleep(0.01)
+
+        self.count = self.read_int('acc_num')
+        print 'Spectrometer is ready.'
+
+    def read_bram(self, bram):
+        """
+        This function reads out data from a ROACH BRAM. The data is
+        stored in the ROACH as 32-bit fixed point numbers with the
+        binary point at the 30th bit.
+
+        Input:
+
+        - ``bram``: The name of the BRAM to read data from.
+
+        Output:
+
+        - ``bram_fp``: Array of floats of the ROACH BRAM values.
+        """
+        bram_size = 4 * self.nchan
+        bram_ints0 = _np.fromstring(self.read(bram + '0', bram_size/2), '>i4')
+        bram_ints1 = _np.fromstring(self.read(bram + '1', bram_size/2), '>i4')
+        bram_ints = _np.array([bram_ints0, bram_ints1])
+        bram_ints = bram_ints.transpose().flatten()
+
+        # Remove DC offset.
+        bram_ints[0] = 0
+        bram_ints[1] = 0
+        bram_ints[-1] = 0
+        bram_ints[-2] = 0
+
+        # Create floats with the fixed-point value of each channel.
+        bram_fp = bram_ints / float(1<<30)
+        return bram_fp
 
 def coords_deg2rad(coords):
     """
