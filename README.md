@@ -7,4 +7,4 @@ Documentation
 -------------
 
 Documentation for the spectrometer can be found here:  
-https://www.astro.utoronto.ca/~domagalski/leuschner-radio/
+http://galadriel.astro.utoronto.ca/~domagalski/leuschner-radio/
